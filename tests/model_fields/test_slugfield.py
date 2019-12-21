@@ -1,3 +1,7 @@
+import re
+import sys
+import unicodedata as ud
+
 from django.db import models
 from django.test import TestCase
 from django.utils.text import slugify
@@ -29,3 +33,102 @@ class SlugFieldTests(TestCase):
         """
         bs = models.SlugField(allow_unicode=True)
         self.assertEqual(bs.clean(slugify('W̊ ㏂ İa', allow_unicode=True), None), 'w-am-ia')
+
+    def test_slugfield_unicode_pass_before(self):
+        """
+        Tests that pass before issue #30892 fix implemented
+        """
+        bs = models.SlugField(allow_unicode=True)
+        items = (
+            # given - expected - unicode?
+            ('The quick brown fox jumps over the lazy dog.', 'the-quick-brown-fox-jumps-over-the-lazy-dog', False),
+            ('spam & eggs', 'spam-eggs', False),
+            ('spam & ıçüş', 'spam-ıçüş', True),
+            ('foo ıç bar', 'foo-ıç-bar', True),
+            ('    foo ıç bar', 'foo-ıç-bar', True),
+            ('你好', '你好', True),
+            ('W̊ ㏂ İa', 'w-am-ia', True),
+            ('The quick brown fox jumps over the lazy dog.',
+             'the-quick-brown-fox-jumps-over-the-lazy-dog', True),
+            ('Pójdźże, kiń tę chmurność w głąb flaszy!',
+             'pójdźże-kiń-tę-chmurność-w-głąb-flaszy', True),
+            ('Lynx c.q. vos prikt bh: dag zwemjuf!',
+             'lynx-cq-vos-prikt-bh-dag-zwemjuf', True),
+            ('zwölf Boxkämpfer quer über den großen.',
+             'zwölf-boxkämpfer-quer-über-den-großen', True),
+            ('pijamalı hasta yağız şoföre çabucak güvendi.',
+             'pijamalı-hasta-yağız-şoföre-çabucak-güvendi', True),
+            ('el veloz murciélago hindú comía feliz cardillo y.',
+             'el-veloz-murciélago-hindú-comía-feliz-cardillo-y', True),
+            ('la cigüeña tocaba el saxofón detrás.', 'la-cigüeña-tocaba-el-saxofón-detrás', True),
+            ('flygande bäckasiner söka strax hwila på', 'flygande-bäckasiner-söka-strax-hwila-på', True),
+            ('Любя, съешь щипцы, — вздохнёт мэр, — кайф жгуч.', 'любя-съешь-щипцы-вздохнёт-мэр-кайф-жгуч', True),
+            ('Nechť již hříšné ďáblů rozzvučí síň úděsnými tóny.',
+             'nechť-již-hříšné-ďáblů-rozzvučí-síň-úděsnými-tóny', True),
+            ('Ξεσκεπάζω την ψυχοφθόρα βδελυγμία.', 'ξεσκεπάζω-την-ψυχοφθόρα-βδελυγμία', True),
+            ('Įlinkusi špaga blykčiodama gręžė apvalų arbūzą.',
+             'įlinkusi-špaga-blykčiodama-gręžė-apvalų-arbūzą', True),
+            ("wepụ he'l'ụjọ n'ime ọzụzụ ụmụ, vufesi obi nye, ṅụrịanụ",
+             'wepụ-helụjọ-nime-ọzụzụ-ụmụ-vufesi-obi-nye-ṅụrịanụ', True),
+            ('Ìwò̩fà ń yò̩ séji gbojúmó̩hàn pákànpò̩ gan-an̩ rè̩ bó dò̩',
+             'ìwòfà-ń-yò-séji-gbojúmóhàn-pákànpò-gan-an-rè-bó-dò', True),
+            ('ĮLINKUSI ŠPAGA BLYKČIODAMA GRĘŽĖ APVALŲ ARBŪZĄ', 'įlinkusi-špaga-blykčiodama-gręžė-apvalų-arbūzą', True),
+        )
+        for value, output, is_unicode in items:
+            self.assertEqual(bs.clean(slugify(value, allow_unicode=is_unicode), None), output)
+
+    def test_all_unicode(self):
+        """
+        Test all (at least many) characters and print all that don't validate
+        """
+        bs = models.SlugField(allow_unicode=True, editable=True)
+        for i in range(sys.maxunicode):
+            u = chr(i)
+            # try:
+            #     s = u.encode('utf-8')
+            # except UnicodeEncodeError:
+            #     continue
+            try:
+                name = ud.name(u)
+            except:
+                name = '?'
+
+            u = u + 'h'  # make sure that string is not empty
+            try:
+                bs.clean(slugify(u, allow_unicode=True), None)
+            except:
+                print(i, u, name)
+
+    def test_unicode_compare(self):
+        """
+        Compare output between new and old implementation of slugify
+        prints all characters that differs
+        """
+        for i in range(sys.maxunicode):
+            u = chr(i)
+            try:
+                name = ud.name(u)
+            except:
+                name = '?'
+
+            sn = slugify(u, allow_unicode=True)
+            so = slugify_old(u, allow_unicode=True)
+
+            if sn != so:
+                print(i, sn, so, name)
+
+
+def slugify_old(value, allow_unicode=False):
+    """
+    Convert to ASCII if 'allow_unicode' is False. Convert spaces to hyphens.
+    Remove characters that aren't alphanumerics, underscores, or hyphens.
+    Convert to lowercase. Also strip leading and trailing whitespace.
+    OLD IMPLEMENTATION
+    """
+    value = str(value)
+    if allow_unicode:
+        value = ud.normalize('NFKC', value)
+    else:
+        value = ud.normalize('NFKD', value).encode('ascii', 'ignore').decode('ascii')
+    value = re.sub(r'[^\w\s-]', '', value).strip().lower()
+    return re.sub(r'[-\s]+', '-', value)
